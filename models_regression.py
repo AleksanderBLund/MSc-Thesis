@@ -486,22 +486,16 @@ def channel_separated_cnn_model(in_channels=3, clinical_dim=21, target_output_si
 # 10. Depthwise Separable 3D CNN Model for Regression
 # -----------------------------------------------
 class Shared3DCNN(nn.Module):
-    """
-    CNN block for processing a single channel.
-    This is used for the first two channels (shared weights),
-    but with fewer channels than the original.
-    """
     def __init__(self):
         super(Shared3DCNN, self).__init__()
-        # Reduced output channels to lower memory usage
-        self.conv1 = nn.Conv3d(1, 16, kernel_size=3, padding=1, bias=False)
-        self.bn1   = nn.BatchNorm3d(16)
+        self.conv1 = nn.Conv3d(1, 8, kernel_size=3, padding=1, bias=False)
+        self.bn1   = nn.BatchNorm3d(8)
 
-        self.conv2 = nn.Conv3d(16, 32, kernel_size=3, padding=1, bias=False)
-        self.bn2   = nn.BatchNorm3d(32)
+        self.conv2 = nn.Conv3d(8, 16, kernel_size=3, padding=1, bias=False)
+        self.bn2   = nn.BatchNorm3d(16)
 
-        self.conv3 = nn.Conv3d(32, 64, kernel_size=3, padding=1, bias=False)
-        self.bn3   = nn.BatchNorm3d(64)
+        self.conv3 = nn.Conv3d(16, 32, kernel_size=3, padding=1, bias=False)
+        self.bn3   = nn.BatchNorm3d(32)
 
         self.pool  = nn.MaxPool3d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout3d(0.3)
@@ -522,20 +516,16 @@ class Shared3DCNN(nn.Module):
         return x
 
 class Separate3DCNN(nn.Module):
-    """
-    Separate CNN block for processing the third channel.
-    Reduced in the same way as Shared3DCNN.
-    """
     def __init__(self):
         super(Separate3DCNN, self).__init__()
-        self.conv1 = nn.Conv3d(1, 16, kernel_size=3, padding=1, bias=False)
-        self.bn1   = nn.BatchNorm3d(16)
+        self.conv1 = nn.Conv3d(1, 8, kernel_size=3, padding=1, bias=False)
+        self.bn1   = nn.BatchNorm3d(8)
 
-        self.conv2 = nn.Conv3d(16, 32, kernel_size=3, padding=1, bias=False)
-        self.bn2   = nn.BatchNorm3d(32)
+        self.conv2 = nn.Conv3d(8, 16, kernel_size=3, padding=1, bias=False)
+        self.bn2   = nn.BatchNorm3d(16)
 
-        self.conv3 = nn.Conv3d(32, 64, kernel_size=3, padding=1, bias=False)
-        self.bn3   = nn.BatchNorm3d(64)
+        self.conv3 = nn.Conv3d(16, 32, kernel_size=3, padding=1, bias=False)
+        self.bn3   = nn.BatchNorm3d(32)
 
         self.pool  = nn.MaxPool3d(kernel_size=2, stride=2)
         self.dropout = nn.Dropout3d(0.3)
@@ -556,84 +546,58 @@ class Separate3DCNN(nn.Module):
         return x
 
 class DepthwiseSeparable3DCNN(nn.Module):
-    """
-    3D CNN that processes the first two channels with a shared CNN and the third with a separate CNN.
-    Clinical data is combined after the image processing part.
-    Expected input: (B, 3, D, H, W)
-    """
     def __init__(self, clinical_dim=15, input_shape=(100, 256, 256)):
         super(DepthwiseSeparable3DCNN, self).__init__()
-        # Shared CNN for channel 0 and 1
         self.shared_cnn = Shared3DCNN()
-        # Separate CNN for channel 2
         self.separate_cnn = Separate3DCNN()
 
-        # Dummy to calculate the shape of the CNN output
-        dummy_input = torch.zeros(1, 1, *input_shape)  # one channel
-
-        # Output from the shared CNN (used for two channels)
+        dummy_input = torch.zeros(1, 1, *input_shape)
         dummy_out_shared = self.shared_cnn(dummy_input)
         shared_out_size = dummy_out_shared.view(1, -1).size(1)
-
-        # Output from the separate CNN (third channel)
         dummy_out_separate = self.separate_cnn(dummy_input)
         separate_out_size = dummy_out_separate.view(1, -1).size(1)
 
-        # Total output size from all image channels
         self.cnn_out_size = shared_out_size * 2 + separate_out_size
 
-        # Clinical processor (reduced size)
         self.clinical_processor = nn.Sequential(
-            nn.Linear(clinical_dim, 128),
+            nn.Linear(clinical_dim, 64),
             nn.ReLU(inplace=True),
-            nn.LayerNorm(128),
+            nn.LayerNorm(64),
             nn.Dropout(0.3),
-            nn.Linear(128, 256),
+            nn.Linear(64, 128),
             nn.ReLU(inplace=True),
-            nn.LayerNorm(256)
+            nn.LayerNorm(128)
         )
 
-        # Fully connected layers (reduced size)
-        self.fc1 = nn.Linear(self.cnn_out_size + 256, 512)
-        self.bn_fc1 = nn.BatchNorm1d(512)
+        self.fc1 = nn.Linear(self.cnn_out_size + 128, 256)
+        self.bn_fc1 = nn.BatchNorm1d(256)
         self.dropout_fc1 = nn.Dropout(0.5)
 
-        self.fc2 = nn.Linear(512, 256)
-        self.bn_fc2 = nn.BatchNorm1d(256)
+        self.fc2 = nn.Linear(256, 128)
+        self.bn_fc2 = nn.BatchNorm1d(128)
         self.dropout_fc2 = nn.Dropout(0.5)
 
-        self.fc3 = nn.Linear(256, 1)
+        self.fc3 = nn.Linear(128, 1)
 
     def forward(self, x, clinical_data):
-        # x is expected to have shape (B, 3, D, H, W)
         B = x.size(0)
-
-        # Channels 0 and 1 through the shared CNN
         x0 = self.shared_cnn(x[:, 0:1, ...])
         x1 = self.shared_cnn(x[:, 1:2, ...])
-
-        # Channel 2 through the separate CNN
         x2 = self.separate_cnn(x[:, 2:3, ...])
 
-        # Combine outputs along the channel axis
         x = torch.cat([x0, x1, x2], dim=1)
         x = x.view(B, -1)
 
-        # Clinical data
         clinical_features = self.clinical_processor(clinical_data)
-
-        # Combine image and clinical features
         combined = torch.cat([x, clinical_features], dim=1)
 
-        # Fully connected layers
         x = F.relu(self.bn_fc1(self.fc1(combined)))
         x = self.dropout_fc1(x)
 
         x = F.relu(self.bn_fc2(self.fc2(x)))
         x = self.dropout_fc2(x)
 
-        x = self.fc3(x)
-        return x
+        return self.fc3(x)
 
     def initialize_weights(self):
         for m in self.modules():
@@ -645,7 +609,7 @@ class DepthwiseSeparable3DCNN(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-def depthwise_separable_3dcnn_model(clinical_dim=15, input_shape=(100, 256, 256)):
+def depthwise_separable_3dcnn_model(clinical_dim=21, input_shape=(100, 256, 256)):
     model = DepthwiseSeparable3DCNN(clinical_dim=clinical_dim, input_shape=input_shape)
     model.initialize_weights()
     return model
