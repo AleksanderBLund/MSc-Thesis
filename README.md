@@ -31,7 +31,7 @@ This repository contains code, plots and notebooks from my MSc thesis project on
 - `dose_distribution_analysis_survival.py`  
   Voxel-wise comparative analysis of 3D radiation dose distributions between short- and long-survival patient groups. Computes spatial dose statistics, significance maps, and summary metrics such as dose-falloff gradients and radii of gyration. Results are saved as plots.
 
-- `GradCamPlots/`  
+- `GradCamMRI` and `GradCamViT`  
   Contains all Grad-CAM visualizations generated during OS model evaluation.
 
 ## 🔐 Data Access
