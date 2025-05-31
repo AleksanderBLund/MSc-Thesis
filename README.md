@@ -11,7 +11,7 @@ This repository contains code, plots and notebooks from my MSc thesis project on
   Jupyter notebook for analyzing overall survival (OS) and running machine learning pipelines using clinical and imaging-derived features.
 
 - `dataset_pipeline.py`  
-  Utility functions for dataset construction and preprocessing. Used in `preprocess.ipynb` to prepare data for analysis and modeling.
+  Utility functions for dataset construction and preprocessing. Used in `preprocess.ipynb` to prepare data for analysis and modeling. The pipeline was made to support direct extraction of clinical values from CSV files. However, this functionality was not utilized in the current implementation. Instead, clinical values were imported from the CSV file used in the clinical-only machine learning approach.
 
 - `models_classification.py`  
   Deep learning models for classification tasks (e.g., binary survival prediction).
