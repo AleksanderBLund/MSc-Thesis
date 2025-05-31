@@ -419,7 +419,7 @@ class InteractiveViewer:
         return pixel_coords
 
     def save_image(self, event=None):
-        """Save a clean version of the image (without ticks, buttons, or legends) as a PDF file."""
+        """Save a clean version of the image (without ticks, buttons, or legends) as a PDF file for better quality."""
         file_path = filedialog.asksaveasfilename(defaultextension='.pdf', filetypes=[("PDF Files", "*.pdf")])
         if not file_path:
             return
@@ -459,7 +459,6 @@ class InteractiveViewer:
         num_slices = ct_array.shape[0]
         self.current_slice = num_slices // 2
 
-        # Create a larger, modern figure
         self.fig, self.ax = plt.subplots(1, 1, figsize=(16, 12))
         plt.subplots_adjust(left=0.05, right=0.95, top=0.93, bottom=0.20)
 
