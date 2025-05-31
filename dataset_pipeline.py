@@ -2,6 +2,11 @@
 This script implements a pipeline for processing multimodal DICOM data (CT, MR, and RT images). 
 It performs image registration, bias correction, resampling and croppin, ROI extraction, dose extraction, 
 and deep learning dataset preparation.
+
+The script also supports importing clinical information from CSV files; however, in this implementation,
+only the patient ID was extracted in order to align image data across modalities. For the clinical features, 
+data was instead taken from the CSV file used in the clinical-only approach,
+to ensure comparability and enable easier normalization across patients.
 """
 import cv2
 import os
@@ -751,7 +756,7 @@ class DoseLoader:
         self.delivery_maximum_dose = -1.0
         self.prescription_dose = -1.0
 
-        self.rtstruct_masks = {}  # We only process ROIs that canonicalize to "Brainstem"
+        self.rtstruct_masks = {}  # process ROIs related to "Brainstem"
 
         self.process_patient()
 
@@ -1106,16 +1111,12 @@ class GBMDataset3D_Survival(Dataset):
         self.target_shape = (self.num_slices, 256, 256)  # Fast slice-størrelse
         self.target_spacing = target_spacing  # Isotropisk voxel spacing i mm
 
-        # Last inn og prosesser data fra CSV
         self.filtered_data = pd.read_csv(filtered_data_csv)
 
-        # Filtrer pasienter med gyldig 'Survived_Over_600_Days' etikett
         self.filtered_data = self.filtered_data.dropna(subset=['Survived_Over_600_Days'])
 
-        # Konverter etikett til binær
         self.filtered_data['Survived_Over_600_Days'] = self.filtered_data['Survived_Over_600_Days'].astype(int)
 
-        # Definer funksjoner
         self.features = [
             'AgeAtStudyDate', 'Sex', 'IDH1/2', 'MGMT'
         ]
@@ -1123,22 +1124,21 @@ class GBMDataset3D_Survival(Dataset):
         self.patient_ids = self.filtered_data['Patient_ID'].tolist()
         self.labels = self.filtered_data['Survived_Over_600_Days'].tolist()
         
-        # Forbered kliniske funksjoner
         self.additional_features = self.filtered_data[self.features].copy()
 
-        # Håndter manglende verdier
+        # manage missing values
         self._handle_missing_values()
 
-        # Kodifiser kategoriske variabler
+        # encode categorical variables
         self._encode_categorical_features()
 
-        # Standardiser numeriske funksjoner
+        # Standardize numerical features
         self._standardize_numerical_features()
 
-        # Konverter til numpy array for effektiv tilgang
+        # converting to numpy array for faster access
         self.processed_features = self.additional_features.values.astype(np.float32)
 
-        # Initialiser ProcessorCache (forutsetter at den er definert et annet sted)
+        # initialize ProcessorCache 
         self.processor_cache = ProcessorCache(max_size=self.cache_size, base_path=self.base_path, verbose=self.verbose)
 
     def _handle_missing_values(self):
@@ -1164,7 +1164,8 @@ class GBMDataset3D_Survival(Dataset):
         if self.verbose:
             print("Normalizing numerical features...")
         numerical_features = [
-            'AgeAtStudyDate'
+            'AgeAtStudyDate' #the rest of the numerical features can be added here, but in this case we used the variables
+            #from the clinical data that are already normalized from the ML approach, later (in the training notebook)
         ]
         # Normalize the numerical features
         for feature in numerical_features:
@@ -1209,17 +1210,17 @@ class GBMDataset3D_Survival(Dataset):
     def __getitem__(self, idx):
         patient_id = self.patient_ids[idx]
         label = self.labels[idx]
-        label = torch.tensor(label, dtype=torch.float32)  # Binær etikett som float
+        label = torch.tensor(label, dtype=torch.float32)  # Binary variable as float
 
         # Get patient data from cache
         processor = self.processor_cache.get(patient_id)
         original_spacing = processor.original_spacing  # Tuple: (z, y, x)
         if processor is None:
-            raise RuntimeError(f"Feilet å laste data for pasient {patient_id}")
+            raise RuntimeError(f"Error in patient {patient_id}")
         if processor.mr_array is None or processor.dose_array is None or processor.mr_t1_array is None:
             processor.load_all_data()
         if processor.mr_array is None or processor.mr_t1_array is None:
-            raise RuntimeError(f"Data ikke korrekt lastet for pasient {patient_id}")
+            raise RuntimeError(f"Error in patient{patient_id}")
 
         # Get image volumes
         mr_t2_volume = processor.registered_mr_array.astype(np.float32)  # MR T2 volum
@@ -1252,7 +1253,7 @@ class GBMDataset3D_Survival(Dataset):
 
         dose_mean = dose_volume.mean()
         dose_std = dose_volume.std()
-        #dose_volume = (dose_volume - dose_mean) / (dose_std + 1e-8)
+        dose_volume = (dose_volume - dose_mean) / (dose_std + 1e-8)
 
         # Stack the volumes to create the input image
         image = np.stack([mr_t1_volume, mr_t2_volume, dose_volume], axis=0)  # Shape: (3, num_slices, 256, 256)
@@ -1271,7 +1272,6 @@ class GBMDataset3D_Survival(Dataset):
             'clinical_features': clinical_features,  # Tensor: (num_features,)
             'patient_id': torch.tensor(patient_id, dtype=torch.long)
         }
-        # Validering av konsistens
         assert image.shape == torch.Size([3, self.num_slices, 256, 256]), \
             f"Inconsistent image shape for pasient {patient_id}: {image.shape}"
 
@@ -1299,18 +1299,15 @@ class GBMDataset3D_PFS(Dataset):
         self.cache_size = cache_size
         self.select_top_slices = select_top_slices
         self.num_slices = num_slices
-        self.target_shape = (self.num_slices, 256, 256)  # Fast slice-størrelse
-        self.target_spacing = target_spacing  # Isotropisk voxel spacing i mm
+        self.target_shape = (self.num_slices, 256, 256)  # image size
+        self.target_spacing = target_spacing  # Isotropic voxel spacing in mm
 
-        # Last inn og prosesser data fra CSV
         self.filtered_data = filtered_data_csv
 
-        # Definer funksjoner
         self.features = [
             'AgeAtStudyDate', 'Sex', 'IDH1/2', 'MGMT'
         ]
 
-        # Separér pasient-IDer og etiketter
         self.patient_ids = filtered_data_csv['AnonymPatientID'].tolist()
         self.pfs_months = filtered_data_csv['PFS_months'].tolist()
         self.pfs_event = filtered_data_csv['PFS_event'].tolist()
@@ -1319,25 +1316,24 @@ class GBMDataset3D_PFS(Dataset):
         self.dose_loader_cache = DoseLoaderCache(
             max_size=self.cache_size, 
             base_path=self.base_path, 
-            dose_threshold_percentage=95.0,  # Juster etter behov
+            dose_threshold_percentage=95.0,  # Adjust as needed
             verbose=self.verbose
         )
-        # Forbered kliniske funksjoner
         self.additional_features = self.filtered_data[self.features].copy()
 
-        # Håndter manglende verdier
+        # manage missing values
         self._handle_missing_values()
 
-        # Kodifiser kategoriske variabler
+        # encode categorical features
         self._encode_categorical_features()
 
-        # Standardiser numeriske funksjoner
+        # Standardize numerical features
         self._standardize_numerical_features()
 
-        # Konverter til numpy array for effektiv tilgang
+        # convert to numpy array
         self.processed_features = self.additional_features.values.astype(np.float32)
 
-        # Initialiser ProcessorCache (forutsetter at den er definert et annet sted)
+        # Initialize ProcessorCache 
         self.processor_cache = ProcessorCache(max_size=self.cache_size, base_path=self.base_path, verbose=self.verbose)
 
     def _handle_missing_values(self):
@@ -1363,7 +1359,9 @@ class GBMDataset3D_PFS(Dataset):
         if self.verbose:
             print("Normalizing numerical features...")
         numerical_features = [
-            'AgeAtStudyDate'
+            'AgeAtStudyDate' # Add more numerical features if needed. in this implementation, we only have AgeAtStudyDate and 
+            #rest of features are added from CSV file from ML clinical-only approach. Done in this way because it was 
+            # easier to normalize the numerical features in the CSV file than in pytorch tensors 
         ]
         # Normalize the numerical features
         for feature in numerical_features:
@@ -1407,9 +1405,9 @@ class GBMDataset3D_PFS(Dataset):
 
     def __getitem__(self, idx):
         patient_id = self.patient_ids[idx]
-        pfs_months = self.pfs_months[idx]  # Bruk PFS måneder direkte
+        pfs_months = self.pfs_months[idx]  
         pfs_event = self.pfs_event[idx]
-        # Konverter pasient-ID til numerisk verdi for tensor
+        # converting patient-ID to numeric value for tensor
         if isinstance(patient_id, str) and 'Burdenko-GBM-' in patient_id:
             patient_num = int(patient_id.split('-')[-1])
         else:
@@ -1419,11 +1417,11 @@ class GBMDataset3D_PFS(Dataset):
         processor = self.processor_cache.get(patient_id)
         original_spacing = processor.original_spacing  # Tuple: (z, y, x)
         if processor is None:
-            raise RuntimeError(f"Feilet å laste data for pasient {patient_id}")
+            raise RuntimeError(f"Error during loading patient {patient_id}")
         if processor.mr_array is None or processor.dose_array is None or processor.mr_t1_array is None:
             processor.load_all_data()
         if processor.mr_array is None or processor.mr_t1_array is None:
-            raise RuntimeError(f"Data ikke korrekt lastet for pasient {patient_id}")
+            raise RuntimeError(f"Error during loading patient {patient_id}")
 
         # Get image volumes
         mr_t2_volume = processor.registered_mr_array.astype(np.float32)  # MR T2 volum
@@ -1458,7 +1456,6 @@ class GBMDataset3D_PFS(Dataset):
         dose_std = dose_volume.std()
         dose_volume = (dose_volume - dose_mean) / (dose_std + 1e-9)
 
-        # Hent dose-relaterte variabler fra DoseLoaderCache
         dose_loader = self.dose_loader_cache.get(patient_id)
         if dose_loader is None:
             # Default values if DoseLoader fails
@@ -1480,7 +1477,7 @@ class GBMDataset3D_PFS(Dataset):
             delivery_maximum_dose,
             volume_above_95_percent_dose
         ], dtype=torch.float32)
-        # Initialiser DoseLoaderCache
+
         # Stack the volumes to create the input image
         image = np.stack([mr_t1_volume, mr_t2_volume, dose_volume], axis=0)  # Shape: (3, num_slices, 256, 256)
 
@@ -1499,7 +1496,6 @@ class GBMDataset3D_PFS(Dataset):
             'pfs_months': torch.tensor(pfs_months, dtype=torch.float32),
             'pfs_event': torch.tensor(pfs_event, dtype=torch.long)
         }
-        # Validering av konsistens
         assert image.shape == torch.Size([3, self.num_slices, 256, 256]), \
             f"Inconsistent image shape for pasient {patient_id}: {image.shape}"
 
@@ -1508,20 +1504,20 @@ class GBMDataset3D_PFS(Dataset):
 class Plotter:
     def __init__(self, processor, verbose=False, target_resolution=None):
         """
-        Initialiserer Plotter med en DICOMProcessor-instans.
-        
+        Initializes the Plotter with an instance of DICOMProcessor.
+
         Parameters:
-          - processor (DICOMProcessor): En instans av DICOMProcessor som inneholder bildedata.
-          - verbose (bool): Hvis True, viser detaljerte utskrifter.
-          - target_resolution (tuple or None): Hvis satt til (width, height) (f.eks. (256,256)), 
-            vil hver slice bli resized før plotting.
+        - processor (DICOMProcessor): An instance of DICOMProcessor containing the image data.
+        - verbose (bool): If True, prints detailed output.
+        - target_resolution (tuple or None): If set to (width, height) (e.g., (256, 256)),
+            each slice will be resized before plotting.
         """
+
         self.processor = processor
         self.verbose = verbose
         self.target_resolution = target_resolution
     
     def _resize_if_needed(self, image):
-        """Hjelpefunksjon for å resize bildet dersom target_resolution er satt."""
         if self.target_resolution is not None:
             # Check if image is valid and non-empty
             if image is None or not hasattr(image, 'shape') or image.size == 0:
@@ -1540,11 +1536,11 @@ class Plotter:
 
     def plot_ct_slice(self, slice_idx, ax=None):
         """
-        Plotter CT-slice ved spesifisert indeks.
+        Plots CT-slice at specified index.
         
         Parameters:
-          - slice_idx (int): Indeksen til slice som skal plottes.
-          - ax (matplotlib.axes.Axes, optional): Akse hvor plottet skal tegnes. Hvis None, opprettes en ny akse.
+          - slice_idx (int): Slice index to plot.
+          - ax (matplotlib.axes.Axes, optional):axes where the plot will be drawn. If None, a new axes is created.
         """
         if ax is None:
             fig, ax = plt.subplots(1, 1, figsize=(5,5))
@@ -1556,26 +1552,26 @@ class Plotter:
                 img = self._resize_if_needed(img)
                 ax.imshow(img, cmap='gray')
                 if self.verbose:
-                    print(f"Plottet CT slice {slice_idx} med shape {img.shape}")
+                    print(f"Plotted CT slice {slice_idx} with shape {img.shape}")
             else:
                 ax.text(0.5, 0.5, f'CT slice {slice_idx} out of range', 
                         horizontalalignment='center', verticalalignment='center')
                 if self.verbose:
-                    print(f"CT slice {slice_idx} er utenfor rekkevidden ({ct.shape[0]})")
+                    print(f"CT slice {slice_idx} out of range ({ct.shape[0]})")
         else:
             ax.text(0.5, 0.5, 'CT not available', 
                     horizontalalignment='center', verticalalignment='center')
             if self.verbose:
-                print("CT array er None")
+                print("CT array is None")
         ax.axis('off')
     
     def plot_mr_t1_slice(self, slice_idx, ax=None):
         """
-        Plotter MR T1-slice ved spesifisert indeks.
+        Plots MR T1-slice at specified index.
         
         Parameters:
-          - slice_idx (int): Indeksen til slice som skal plottes.
-          - ax (matplotlib.axes.Axes, optional): Akse hvor plottet skal tegnes. Hvis None, opprettes en ny akse.
+          - slice_idx (int): Slice index to plot.
+          - ax (matplotlib.axes.Axes, optional):axes where the plot will be drawn. If None, a new axes is created.
         """
         if ax is None:
             fig, ax = plt.subplots(1, 1, figsize=(5,5))
@@ -1587,26 +1583,26 @@ class Plotter:
                 img = self._resize_if_needed(img)
                 ax.imshow(img, cmap='gray')
                 if self.verbose:
-                    print(f"Plottet MR T1 slice {slice_idx} med shape {img.shape}")
+                    print(f"Plot MR T1 slice {slice_idx} with shape {img.shape}")
             else:
                 ax.text(0.5, 0.5, f'MR T1 slice {slice_idx} out of range', 
                         horizontalalignment='center', verticalalignment='center')
                 if self.verbose:
-                    print(f"MR T1 slice {slice_idx} er utenfor rekkevidden ({mr_t1.shape[0]})")
+                    print(f"MR T1 slice {slice_idx} is out of range ({mr_t1.shape[0]})")
         else:
             ax.text(0.5, 0.5, 'MR T1 not available', 
                     horizontalalignment='center', verticalalignment='center')
             if self.verbose:
-                print("MR T1 array er None")
+                print("MR T1 array is None")
         ax.axis('off')
     
     def plot_mr_t2_slice(self, slice_idx, ax=None):
         """
-        Plotter MR T2-slice ved spesifisert indeks.
+        Plots MR T2-slice at specified index.
         
         Parameters:
-          - slice_idx (int): Indeksen til slice som skal plottes.
-          - ax (matplotlib.axes.Axes, optional): Akse hvor plottet skal tegnes. Hvis None, opprettes en ny akse.
+          - slice_idx (int): Slice index to plot.
+          - ax (matplotlib.axes.Axes, optional):axes where the plot will be drawn. If None, a new axes is created.
         """
         if ax is None:
             fig, ax = plt.subplots(1, 1, figsize=(5,5))
